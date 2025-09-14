@@ -6,6 +6,8 @@ import numpy as np
 from scipy.optimize import curve_fit
 from scipy.signal import find_peaks
 
+PRINT_DATA_THETA_V_TIME = False
+
 def linear(x, m, c):
     """
     y = mx + c
@@ -21,50 +23,118 @@ def plot_linear(p_opt, label, color):
              label=label, lw=2, color=color)
 
 
+def quadratic(t, a, b, c):
+    return a*t**2 + b*t + c
+
+def refine_peak(i, time, theta, window, sigma_theta=None):
+    """Refine peak around index i with quadratic fit, propagate uncertainty"""
+    left = max(0, i-window)
+    right = min(len(time), i+window+1)
+    t_slice = time[left:right]
+    th_slice = theta[left:right]
+
+    # Fit quadratic
+    if sigma_theta is not None:
+        sigma = np.full_like(th_slice, sigma_theta)
+        p_opt, p_cov = curve_fit(quadratic, t_slice, th_slice,
+                                 sigma=sigma, absolute_sigma=True)
+    else:
+        p_opt, p_cov = curve_fit(quadratic, t_slice, th_slice)
+    a, b, c = p_opt
+    Sigma = p_cov
+
+    # Vertex
+    t_max = -b / (2*a)
+    theta_max = c - b**2/(4*a)
+
+    # Gradients for error propagation
+    dt_da = b / (2*a**2)
+    dt_db = -1/(2*a)
+    dt_dc = 0
+    J_t = np.array([dt_da, dt_db, dt_dc])
+
+    dth_da = (b**2)/(4*a**2)
+    dth_db = -b/(2*a)
+    dth_dc = 1
+    J_th = np.array([dth_da, dth_db, dth_dc])
+
+    # Variances
+    var_t = J_t @ Sigma @ J_t.T
+    var_th = J_th @ Sigma @ J_th.T
+
+    return t_max, theta_max, np.sqrt(var_t), np.sqrt(var_th)
+
+print("Loading Data...")
 time, theta = np.loadtxt(
     'data/angleDegreesPendulum.txt',
     delimiter=',', skiprows=1000,  # skip 3 lines: blank, header, column names
     unpack=True
 )
 
+print("Refining Peaks...")
 peaks, _= find_peaks(theta)
-max_times = [time[i] for i in peaks if theta[i] > 0]
-max_thetas = [theta[i] for i in peaks if theta[i] > 0]
+refined_times, refined_thetas = [], []
+time_errs, theta_errs = [], []
+for i in peaks:
+    if theta[i] > 0:  # keep only positive peaks
+        t_max, th_max, dt, dth = refine_peak(i, time, theta, sigma_theta=0.05, window=3)
+        refined_times.append(t_max)
+        refined_thetas.append(th_max)
+        time_errs.append(dt)
+        theta_errs.append(dth)
 
-time_periods = [max_times[i+1] - max_times[i] for i in range(len(max_times) - 1)]
-# print(time_periods)
+refined_times = np.array(refined_times)
+refined_thetas = np.array(refined_thetas)
+time_errs = np.array(time_errs)
+theta_errs = np.array(theta_errs)
 
-# ====================================
+# Periods and uncertainties
+time_periods = refined_times[1:] - refined_times[:-1]
+time_periods_err = np.sqrt(time_errs[1:]**2 + time_errs[:-1]**2)
 
-# plt.figure(1)
-# plt.title("Position on time of mass")
-# plt.plot(time, theta, ls='', marker='o', label='Data', markersize=2)
-# plt.plot(max_times, max_thetas, ls='', marker='o', label='Max', markersize=2)
-# plt.xlabel("Time (s)")
-# plt.ylabel("Angle (degrees)")
-# plt.legend()
-# plt.show()
-# =====================================
-
-x_values = max_thetas[:-1]
-x_unc = None #[5] * len(max_thetas - 1)
-
+# Final regression: theta_max vs period
 y_values = time_periods
-y_unc = [0.016] * len(time_periods)
-
+x_values = refined_thetas[:-1]
+y_unc = time_periods_err
+x_unc = theta_errs[:-1]
 
 p_opt, p_cov = curve_fit(linear, x_values, y_values, sigma=y_unc, absolute_sigma=True)
 p_var = np.diag(p_cov)
 sd = np.sqrt(p_var)
 
+print("FITTED PARAMETERS:")
 print(f"m = {p_opt[0]} +- {sd[0]}")
 print(f"c = {p_opt[1]} +- {sd[1]}")
 
+# Calculate reduced chi-squared
+residuals = y_values - linear(x_values, *p_opt)
+chi2 = np.sum((residuals / y_unc)**2)
+ndof = len(y_values) - len(p_opt)  # degrees of freedom
+chi2_red = chi2 / ndof
+print(f"Reduced Chi^2 = {chi2_red:.2f}")
+
+
+# --- Plot for Period vs Angle ---
 plt.figure(2)
-plt.title("Position on time of mass")
-plt.errorbar(max_thetas[:-1], time_periods, yerr=y_unc ,ls='', marker='o', label='Data', markersize=2)
-plot_linear(p_opt, "Fit", "green")
-plt.xlabel("Theta (degrees)")
-plt.ylabel("Time periods (s)")
+x_linspace = np.linspace(min(x_values), max(x_values), 1000)
+plt.errorbar(x_values, y_values, yerr=y_unc,
+             ls='', marker='o', label='Refined maxima', capsize=2, zorder=1)
+plt.plot(x_linspace, linear(x_linspace, *p_opt), label="Fit", color="green", zorder=2)
+plt.xlabel("Max Angle (Degrees)")
+plt.ylabel("Time period (s)")
+plt.title("Period v. Refined Max")
 plt.legend()
+plt.show()
+
+
+# --- Residuals plot for Period v Angle ---
+plt.figure(3)
+plt.errorbar(
+    x_values, residuals, yerr=y_unc,
+    ls='', marker='o', color="blue", capsize=2
+)
+plt.axhline(0, color="gray", linestyle="--", linewidth=1)
+plt.xlabel("Max Angle (Degrees)")
+plt.ylabel("Residuals (s)")
+plt.title("Residuals of Linear Fit")
 plt.show()
