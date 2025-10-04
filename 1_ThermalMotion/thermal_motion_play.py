@@ -6,7 +6,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 from scipy.optimize import curve_fit
 from scipy.signal import find_peaks
-
+from scipy.constants import Boltzmann
 
 def linear(x, m, c):
     """
@@ -34,7 +34,7 @@ def format_uncertainty(value, uncertainty):
     unc_rounded = round(uncertainty, decimals)
     val_rounded = round(value, decimals)
 
-    return f"{val_rounded:.{decimals}f} ± {unc_rounded:.{decimals}f}"
+    return f"{val_rounded:.1e} ± {unc_rounded:.0e}"
 
 def check_unc(y_unc):
     print("y_unc: min, median, max:", np.nanmin(y_unc), np.nanmedian(y_unc), np.nanmax(y_unc))
@@ -131,6 +131,8 @@ def main():
     eta = 1e-3               # Pa·s (1 cP)
     r = 0.95e-6              # metres
 
+    # TODO: please add the uncertainties of T
+
     # Extract slope from fit (m = 4D)
     m_fit = p_opt[0]
     m_sd = sd[0]
@@ -147,6 +149,12 @@ def main():
     print("Boltzmann constant k =", format_uncertainty(k, k_sd))
     print("So, an initial guess at k =", k)
 
+    print("The accepted answer for Boltzmann's constant is:", Boltzmann)
+    if Boltzmann >= (k - k_sd) and Boltzmann <= (k + k_sd):
+        print("The accpeted value is within our estimated range")
+    else:
+        print("The accpeted value is OUTSIDE our estimated range")
+
     # Calculate reduced chi-squared
     residuals = y_values - linear(x_values, *p_opt)
     chi2 = np.sum((residuals / y_unc)**2)
@@ -156,60 +164,33 @@ def main():
 
     # Plot
     plt.figure(1)
+    plt.title("Average Mean Squared Displacement against Time Elapsed")
     plt.errorbar(x_values, y_values, yerr=y_unc, ls='', marker='o', ms=2 ,label=r"$\langle r^2(t) \rangle$")
     plt.xlabel("Time (s)")
     plt.ylabel("Mean squared displacement (metres ^ 2)")
     x_linspace = np.linspace(min(x_values), max(x_values), 100)
     plt.plot(x_linspace, linear(x_linspace, *p_opt), label="Fit", color="green")
+    # PLOT THE ACCPTED VALUE AS WELL...
+    # plt.plot(x_linspace, linear(x_linspace, ), label="accepted value", color="red")
     plt.legend()
     plt.show()
 
 
     # Plot Residuals
     plt.figure(2)
+    plt.title("Residuals: Average Mean Squared Displacement against Time Elapsed")
     plt.errorbar(
         x_values, residuals, yerr=y_unc,
         ls='', marker='o', color="blue", capsize=2
     )
     plt.axhline(0, color="gray", linestyle="--", linewidth=1)
-    plt.xlabel("")
-    plt.ylabel("")
-    plt.title("")
+    plt.xlabel("Time (s)")
+    plt.ylabel("Residuals (metres ^ 2)")
 
     # plt.savefig("results/period_vs_angle_residual.png", dpi=300, bbox_inches="tight")
     plt.show()
 
     # ===============================
-
-
-    # # --- Plot for Period vs Angle ---
-    # plt.figure(2)
-    # x_linspace = np.linspace(min(x_values), max(x_values), 1000)
-    # plt.errorbar(x_values, y_values, yerr=y_unc,
-    #             ls='', marker='o', label='Refined maxima', capsize=2, zorder=1)
-    # plt.plot(x_linspace, linear(x_linspace, *p_opt), label="Fit", color="green", zorder=2)
-    # plt.xlabel("")
-    # plt.ylabel("")
-    # plt.title("")
-    # plt.legend()
-
-    # # plt.savefig("results/period_vs_angle.png", dpi=300, bbox_inches="tight")
-
-
-
-    # # --- Residuals plot for Period v Angle ---
-    # plt.figure(3)
-    # plt.errorbar(
-    #     x_values, residuals, yerr=y_unc,
-    #     ls='', marker='o', color="blue", capsize=2
-    # )
-    # plt.axhline(0, color="gray", linestyle="--", linewidth=1)
-    # plt.xlabel("")
-    # plt.ylabel("")
-    # plt.title("")
-
-    # # plt.savefig("results/period_vs_angle_residual.png", dpi=300, bbox_inches="tight")
-    # plt.show()
 
 if __name__ == "__main__":
     main()
