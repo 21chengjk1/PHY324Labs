@@ -8,6 +8,8 @@ from scipy.optimize import curve_fit
 from scipy.signal import find_peaks
 from scipy.constants import Boltzmann
 
+SHOW_PLOTS = False
+
 def linear(x, m, c):
     """
     y = mx + c
@@ -127,23 +129,58 @@ def main():
     print("c =", format_uncertainty(p_opt[1], sd[1]))
     
     # Physical constants (SI units)
-    T = 295.5                # Kelvin
-    eta = 1e-3               # Pa·s (1 cP)
-    r = 0.95e-6              # metres
+    T = 296.5                   # Kelvin
+    # T = 305                   # This is how high the temp would need to be to get a good result... 32 degrees C! :O
+    T_sd = 0.5
 
-    # TODO: please add the uncertainties of T
+    # eta = 0.93e-3               # Pa s
+    # eta_sd = 0.05e-3
+
+    # Convert temperature to Celsius
+    T_C = T - 273.15
+    T_C_sd = T_sd
+
+    # Reference viscosity at 20°C
+    eta0 = 1.00e-3           # Pa·s  (1.00 cP)
+    eta0_sd = 0.05e-3        # Pa·s uncertainty
+
+    # Viscosity decreases 2% per °C increase
+    rate = 0.02              # fractional change per degree
+
+    # Compute viscosity at T_C
+    delta_T = T_C - 20.0
+
+    # Propagate uncertainties:
+    rel_eta_unc_from_eta0 = eta0_sd / eta0
+    rel_eta_unc_from_T = abs(np.log(1 - rate)) * T_C_sd
+    rel_eta_unc_total = np.sqrt(rel_eta_unc_from_eta0**2 + rel_eta_unc_from_T**2)
+    eta = eta0 * (1 - rate)**delta_T
+    eta_sd = eta * rel_eta_unc_total
+
+    r = 1.9e-6                  # radius of bead in metres
+    r_sd = 0.1e-6
 
     # Extract slope from fit (m = 4D)
     m_fit = p_opt[0]
     m_sd = sd[0]
 
-    # Compute D
+    # Compute D and its uncertainty
     D = m_fit / 4
     D_sd = m_sd / 4
 
     # Compute Boltzmann constant
     k = (6 * np.pi * eta * r * D) / T
-    k_sd = (6 * np.pi * eta * r * D_sd) / T
+
+    rel_unc_k = np.sqrt(
+        (D_sd / D)**2 +
+        (eta_sd / eta)**2 +
+        (r_sd / r)**2 +
+        (T_sd / T)**2
+    )
+
+    print("rel_unc_k = ", rel_unc_k)
+
+    k_sd = k * rel_unc_k
 
     print("Diffusion constant D =", format_uncertainty(D, D_sd))
     print("Boltzmann constant k =", format_uncertainty(k, k_sd))
@@ -162,33 +199,34 @@ def main():
     chi2_red = chi2 / ndof
     print(f"Reduced Chi^2 = {chi2_red:.2f}")
 
-    # Plot
-    plt.figure(1)
-    plt.title("Average Mean Squared Displacement against Time Elapsed")
-    plt.errorbar(x_values, y_values, yerr=y_unc, ls='', marker='o', ms=2 ,label=r"$\langle r^2(t) \rangle$")
-    plt.xlabel("Time (s)")
-    plt.ylabel("Mean squared displacement (metres ^ 2)")
-    x_linspace = np.linspace(min(x_values), max(x_values), 100)
-    plt.plot(x_linspace, linear(x_linspace, *p_opt), label="Fit", color="green")
-    # PLOT THE ACCPTED VALUE AS WELL...
-    # plt.plot(x_linspace, linear(x_linspace, ), label="accepted value", color="red")
-    plt.legend()
-    plt.show()
+    if SHOW_PLOTS:
+        # Plot
+        plt.figure(1)
+        plt.title("Average Mean Squared Displacement against Time Elapsed")
+        plt.errorbar(x_values, y_values, yerr=y_unc, ls='', marker='o', ms=2 ,label=r"$\langle r^2(t) \rangle$")
+        plt.xlabel("Time (s)")
+        plt.ylabel("Mean squared displacement (metres ^ 2)")
+        x_linspace = np.linspace(min(x_values), max(x_values), 100)
+        plt.plot(x_linspace, linear(x_linspace, *p_opt), label="Fit", color="green")
+        # PLOT THE ACCPTED VALUE AS WELL...
+        # plt.plot(x_linspace, linear(x_linspace, ), label="accepted value", color="red")
+        plt.legend()
+        plt.show()
 
 
-    # Plot Residuals
-    plt.figure(2)
-    plt.title("Residuals: Average Mean Squared Displacement against Time Elapsed")
-    plt.errorbar(
-        x_values, residuals, yerr=y_unc,
-        ls='', marker='o', color="blue", capsize=2
-    )
-    plt.axhline(0, color="gray", linestyle="--", linewidth=1)
-    plt.xlabel("Time (s)")
-    plt.ylabel("Residuals (metres ^ 2)")
+        # Plot Residuals
+        plt.figure(2)
+        plt.title("Residuals: Average Mean Squared Displacement against Time Elapsed")
+        plt.errorbar(
+            x_values, residuals, yerr=y_unc,
+            ls='', marker='o', color="blue", capsize=2
+        )
+        plt.axhline(0, color="gray", linestyle="--", linewidth=1)
+        plt.xlabel("Time (s)")
+        plt.ylabel("Residuals (metres ^ 2)")
 
-    # plt.savefig("results/period_vs_angle_residual.png", dpi=300, bbox_inches="tight")
-    plt.show()
+        # plt.savefig("results/period_vs_angle_residual.png", dpi=300, bbox_inches="tight")
+        plt.show()
 
     # ===============================
 
