@@ -32,11 +32,15 @@ def format_uncertainty(value, uncertainty):
     # number of decimal places to round to
     decimals = -exponent if exponent < 0 else 0
 
+    decimals += 1
+
     # round both value and uncertainty
     unc_rounded = round(uncertainty, decimals)
     val_rounded = round(value, decimals)
 
-    return f"{val_rounded:.1e} ± {unc_rounded:.0e}"
+    # return f"{val_rounded:.2e} ± {unc_rounded:.2e}"
+
+    return f"{value:.3e} ± {uncertainty:.3e}"
 
 def check_unc(y_unc):
     print("y_unc: min, median, max:", np.nanmin(y_unc), np.nanmedian(y_unc), np.nanmax(y_unc))
