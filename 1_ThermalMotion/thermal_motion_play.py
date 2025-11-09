@@ -8,7 +8,8 @@ from scipy.optimize import curve_fit
 from scipy.signal import find_peaks
 from scipy.constants import Boltzmann
 
-SHOW_PLOTS = False
+SHOW_PLOTS = True
+CROP_PLOTS = False
 
 def linear(x, m, c):
     """
@@ -215,6 +216,8 @@ def main():
         # PLOT THE ACCPTED VALUE AS WELL...
         # plt.plot(x_linspace, linear(x_linspace, ), label="accepted value", color="red")
         plt.legend()
+        if CROP_PLOTS:
+            plt.xlim(0, 30)
         plt.show()
 
 
@@ -230,6 +233,8 @@ def main():
         plt.ylabel("Residuals (metres ^ 2)")
 
         # plt.savefig("results/period_vs_angle_residual.png", dpi=300, bbox_inches="tight")
+        if CROP_PLOTS:
+            plt.xlim(0, 30)
         plt.show()
 
     # ===============================
