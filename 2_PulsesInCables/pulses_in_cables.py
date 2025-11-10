@@ -9,7 +9,8 @@ from scipy.optimize import curve_fit
 from scipy.signal import find_peaks
 from scipy.constants import speed_of_light
 
-SHOW_OSC_PLOTS = True
+SHOW_OSC_PLOTS = False
+SHOW_FIT_PLOTS = False
 
 def linear(x, m, c):
     """
@@ -50,7 +51,7 @@ def main():
     print("---START---")
     print("Hello Welcome to the Pulses in Cables experiment!")
 
-    lengths = np.array([15.09, 30.5, 48.36, 75.84])  # cm
+    lengths = np.array([15.09, 30.5, 48.36, 75.84])  # m
     length_unc = 0.02
 
     files = glob.glob("data/*.csv")
@@ -94,11 +95,8 @@ def main():
     # ============= Plot Length vs. Time Delay ==========================================
 
     print("\n==Plot Length vs. Time Delay==")
-    plt.figure(100) 
     x_values = time_delays
-    y_values = lengths/100 * 2 # Travels through twice, convert to m.
-
-    plt.plot(x_values, y_values, color='blue', ls='', marker='o', label='Data')
+    y_values = lengths * 2 # Travels through twice, convert to m.
 
     # p_opt, p_cov = curve_fit(linear, x_values, y_values, sigma=y_unc, absolute_sigma=True)
     p_opt, p_cov = curve_fit(linear, x_values, y_values)  # If i don't have a y_unc yet
@@ -109,26 +107,29 @@ def main():
     print("m =", p_opt[0], "+-", sd[0])
     print("c =", p_opt[1], "+-", sd[1])
 
-    print(f"This means that the speed through the cable is {p_opt[0]/speed_of_light}C")
+    print(f"This means that the speed through the cable is {p_opt[0]/speed_of_light} +- {sd[0]/speed_of_light} c")
 
     x_linspace = np.linspace(min(x_values), max(x_values), 100)
-    plt.plot(x_linspace, linear(x_linspace, *p_opt), label="Fit", color="green")
 
-    plt.xlabel("Time Delay (s)")
-    plt.ylabel("Cable Length (m)")
-    plt.title("Length vs. Time Delay")
-    plt.legend()
-    plt.grid(True)
-    plt.show()
+    if SHOW_FIT_PLOTS:
+        plt.figure(100) 
+        plt.plot(x_values, y_values, color='blue', ls='', marker='o', label='Data')
+        plt.plot(x_linspace, linear(x_linspace, *p_opt), label="Fit", color="green")
+        plt.xlabel("Time Delay (s)")
+        plt.ylabel("Cable Length (m)")
+        plt.title("Length vs. Time Delay")
+        plt.legend()
+        plt.grid(True)
+        plt.show()
 
     # ============= Plot Length vs. Attenuation ==========================================
 
     print("\n==Plot Length vs. Attenuation==")
-    plt.figure(101)
-    x_values = attenuations
-    y_values = lengths/100 * 2    # Metres.
 
-    plt.plot(x_values, y_values, color='blue', ls='', marker='o', label='Data')
+    x_values = attenuations
+    y_values = lengths * 2    # Metres.
+
+    
     # p_opt, p_cov = curve_fit(linear, x_values, y_values, sigma=y_unc, absolute_sigma=True)
     p_opt, p_cov = curve_fit(linear, x_values, y_values)  # If i don't have a y_unc yet
     p_var = np.diag(p_cov)
@@ -139,16 +140,19 @@ def main():
     print("c =", p_opt[1], "+-", sd[1])
 
     print(f"This means that attenuation per cm is {p_opt[0]}")
+    if SHOW_FIT_PLOTS:
+        plt.figure(101)
+        plt.plot(x_values, y_values, color='blue', ls='', marker='o', label='Data')
 
-    x_linspace = np.linspace(min(x_values), max(x_values), 100)
-    plt.plot(x_linspace, linear(x_linspace, *p_opt), label="Fit", color="green")
+        x_linspace = np.linspace(min(x_values), max(x_values), 100)
+        plt.plot(x_linspace, linear(x_linspace, *p_opt), label="Fit", color="green")
 
-    plt.xlabel("Attenuation (dB)")
-    plt.ylabel("Cable Length (cm)")
-    plt.title("Length vs. Time Delay")
-    plt.legend()
-    plt.grid(True)
-    plt.show()
+        plt.xlabel("Attenuation (dB)")
+        plt.ylabel("Cable Length (cm)")
+        plt.title("Length vs. Time Delay")
+        plt.legend()
+        plt.grid(True)
+        plt.show()
 
     print("---END---")
 
