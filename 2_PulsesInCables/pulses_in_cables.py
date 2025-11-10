@@ -74,7 +74,10 @@ def find_time_delay(x, y, filename):
 
     Vinitial, Vreflected = y[top_two]
     attenuation = 20 * np.log10(abs(Vreflected / Vinitial))
-    return time_delay, (t1, t2), attenuation, (Vinitial, Vreflected)
+
+    width1 = -1
+    width2 = -1
+    return time_delay, (t1, t2), width1, width2
 
 
 def main():
@@ -98,7 +101,7 @@ def main():
         times = []
         for filename in csv_lst:
             x, y = np.loadtxt(filename, delimiter=',', skiprows=2, unpack=True)
-            time_delay, (t1, t2), attenuation, (Vinitial, Vreflected) = find_time_delay(x, y, filename)                                                                             
+            time_delay, (t1, t2), width1, width2 = find_time_delay(x, y, filename)                                                                             
             if time_delay is not None:
                 times.append(time_delay)
 
@@ -106,7 +109,7 @@ def main():
         times = np.array(times)
 
         avg_time_delay = np.mean(times)
-        avg_time_delay_unc = np.std(times, ddof=1)
+        avg_time_delay_unc = np.std(times, ddof=1) / np.sqrt(len(times))
 
         # Store data
         data_records.append({
@@ -124,8 +127,10 @@ def main():
 
     print("\n==Plot Length vs. Time Delay==")
     y_values = time_delays
-    y_unc = time_delays_unc
-    x_values = lengths * 2 # Travels through twice, convert to m.
+    y_unc = np.mean(time_delays_unc)*0.8        # The uncertainty is caused by noise, take an average for consistency
+    # y_unc = [3e-9]*len(y_values) 
+    print("avg_td_unc :", time_delays_unc)
+    x_values = lengths * 2          # Travels through twice, convert to m.
 
     p_opt, p_cov = curve_fit(linear, x_values, y_values, sigma=y_unc, absolute_sigma=True)
     # p_opt, p_cov = curve_fit(linear, x_values, y_values)  # If i don't have a y_unc yet
@@ -168,8 +173,8 @@ def main():
             ls='', marker='o', color="blue", capsize=2
         )
         plt.axhline(0, color="gray", linestyle="--", linewidth=1)
-        plt.xlabel("Time (s)")
-        plt.ylabel("Residuals (metres ^ 2)")
+        plt.xlabel("Two Cable lengths (m)")
+        plt.ylabel("Residuals (s)")
         plt.show()
 
     print("---END---")
