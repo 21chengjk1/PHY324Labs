@@ -6,7 +6,7 @@ import matplotlib.pyplot as plt
 import glob
 import os
 from scipy.optimize import curve_fit
-from scipy.signal import find_peaks
+from scipy.signal import find_peaks, peak_widths
 from scipy.constants import speed_of_light
 
 # if SHOW_OSC_PLOTS:
@@ -22,7 +22,7 @@ from scipy.constants import speed_of_light
 
 
 SHOW_OSC_PLOTS = False
-SHOW_FIT_PLOTS = True
+SHOW_FIT_PLOTS = False
 
 def linear(x, m, c):
     """
@@ -62,21 +62,24 @@ def find_time_delay(x, y, filename):
     t1, t2 = x[top_two]
     time_delay = abs(t2 - t1)
 
+    Vinitial, Vreflected = y[top_two]
+    attenuation = 20 * np.log10(abs(Vreflected / Vinitial))
+
+    results_half = peak_widths(y_temp, peaks=top_two, rel_height=0.7)
+    # Convert from sample width to time width
+    widths_in_time = results_half[0] * (x[1] - x[0])
+    width1, width2 = widths_in_time
+
     if SHOW_OSC_PLOTS:
         plt.figure()
         plt.plot(x, y, label='data')
-        plt.title(f"{filename}, time delay is {time_delay}")
+        plt.title(f"{filename}, time delay is {time_delay}, w1 = {width1}, w2 = {width2}")
         plt.xlabel("Time (s)")
         plt.ylabel("Voltage (V)")
         plt.axvline(t1, color='r', linestyle='--')
         plt.axvline(t2, color='r', linestyle='--')
         plt.show()
 
-    Vinitial, Vreflected = y[top_two]
-    attenuation = 20 * np.log10(abs(Vreflected / Vinitial))
-
-    width1 = -1
-    width2 = -1
     return time_delay, (t1, t2), width1, width2
 
 
@@ -99,17 +102,21 @@ def main():
 
     for n, (csv_lst, length) in enumerate(zip(the_csvs, lengths)):
         times = []
+        peak_width_diff = []
         for filename in csv_lst:
             x, y = np.loadtxt(filename, delimiter=',', skiprows=2, unpack=True)
             time_delay, (t1, t2), width1, width2 = find_time_delay(x, y, filename)                                                                             
             if time_delay is not None:
                 times.append(time_delay)
+                peak_width_diff.append(abs(width1-width2))
 
         print(f'At length {length}, the time delays are:', times)
         times = np.array(times)
+        peak_width_diff = np.array(peak_width_diff)
 
         avg_time_delay = np.mean(times)
         avg_time_delay_unc = np.std(times, ddof=1) / np.sqrt(len(times))
+        # avg_time_delay_unc = np.mean(peak_width_diff)
 
         # Store data
         data_records.append({
@@ -127,7 +134,8 @@ def main():
 
     print("\n==Plot Length vs. Time Delay==")
     y_values = time_delays
-    y_unc = np.mean(time_delays_unc)*0.8        # The uncertainty is caused by noise, take an average for consistency
+    y_unc = np.mean(time_delays_unc)        # The uncertainty is caused by noise, take an average for consistency
+    # y_unc = time_delays_unc
     # y_unc = [3e-9]*len(y_values) 
     print("avg_td_unc :", time_delays_unc)
     x_values = lengths * 2          # Travels through twice, convert to m.
