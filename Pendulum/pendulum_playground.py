@@ -1,14 +1,7 @@
 """
-This is where I'm messing around with python for the pendulum project.
+This python file is a playground.
 """
 
-print("Hello pendulum!!!")
-
-
-
-"""
-This python file is to complete check in 1
-"""
 import matplotlib.pyplot as plt
 import numpy as np
 from scipy.optimize import curve_fit

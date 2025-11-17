@@ -1,5 +1,5 @@
 """
-This python file is to complete check in 1
+This python file outputs the data and attempts to fit a damped cosine.
 """
 import matplotlib.pyplot as plt
 import numpy as np
