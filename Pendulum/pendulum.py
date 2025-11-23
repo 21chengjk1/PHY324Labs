@@ -6,11 +6,28 @@ Jack Cheng 1010266695
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy.optimize import curve_fit
+from scipy.signal import find_peaks
+from scipy.interpolate import interp1d
 
-PLOT_RAW_DATA = True
+PLOT_RAW_DATA = False
+PlOT_T_VS_AMPLITUDE = False
+PLOT_SYMMETRY = False
+PLOT_EXPONENTIAL = False
+
+def linear(x, m, c):
+    """
+    y = mx + c
+    """
+    return m*x + c
 
 def quadratic(t, a, b, c):
     return a*t**2 + b*t + c
+
+def exponential(t, theta_0, tau):
+    """
+    y = theta_0 e^(-t/tau)
+    """
+    return theta_0 * np.exp(-t/tau)
 
 def refine_peak(i, time, theta, window, sigma_theta=None):
     """Refine peak around index i with quadratic fit, propagate uncertainty"""
@@ -50,6 +67,170 @@ def refine_peak(i, time, theta, window, sigma_theta=None):
 
     return t_max, theta_max, np.sqrt(var_t), np.sqrt(var_th)
 
+def format_uncertainty(value, uncertainty):
+    """
+    Format value ± uncertainty so that:
+    - uncertainty has 1 significant figure
+    - value is rounded to same decimal place
+    """
+    
+    if uncertainty == 0:
+        return f"{value} ± 0"
+
+    # order of magnitude of uncertainty
+    exponent = int(np.floor(np.log10(abs(uncertainty))))
+
+    # number of decimal places to round to
+    decimals = -exponent if exponent < 0 else 0
+
+    # round both value and uncertainty
+    unc_rounded = round(uncertainty, decimals)
+    val_rounded = round(value, decimals)
+
+    return f"{val_rounded:.{decimals}f} ± {unc_rounded:.{decimals}f}"
+
+def refine_each_peak(time, theta):
+    peaks, _ = find_peaks(theta)
+    refined_times, refined_thetas = [], []
+    time_errs, theta_errs = [], []
+
+    # refine each peak
+    for i in peaks:
+        if theta[i] > 0:  # only positive peaks
+            t_max, th_max, dt, dth = refine_peak(i, time, theta,
+                                                 sigma_theta=0.05,
+                                                 window=3)
+            refined_times.append(t_max)
+            refined_thetas.append(th_max)
+            time_errs.append(dt)
+            theta_errs.append(dth)
+
+    refined_times = np.array(refined_times)
+    refined_thetas = np.array(refined_thetas)
+    time_errs = np.array(time_errs)
+    theta_errs = np.array(theta_errs)
+
+    # plt.figure()
+    # plt.plot(refined_times, refined_thetas)
+    # plt.title("TEST TEST")
+    
+    # ---- Remove outliers in refined_thetas based on neighbor deviation ----
+    # Compute magnitude of local changes
+    diffs = np.abs(np.diff(refined_thetas))
+
+    # Robust scale of typical variation
+    threshold = 3 * np.median(diffs)
+
+    keep_indices = []
+
+    for i in range(len(refined_thetas)):
+        if i == 0:
+            # Only right neighbor
+            right_diff = abs(refined_thetas[i] - refined_thetas[i+1])
+            if right_diff < threshold:
+                keep_indices.append(i)
+
+        elif i == len(refined_thetas) - 1:
+            # Only left neighbor
+            left_diff = abs(refined_thetas[i] - refined_thetas[i-1])
+            if left_diff < threshold:
+                keep_indices.append(i)
+
+        else:
+            # Interior point — keep if consistent with either neighbor
+            left_diff  = abs(refined_thetas[i] - refined_thetas[i-1])
+            right_diff = abs(refined_thetas[i] - refined_thetas[i+1])
+
+            if left_diff < threshold or right_diff < threshold:
+                keep_indices.append(i)
+
+    keep_indices = np.array(keep_indices)
+
+    # ---- Apply mask to all arrays ----
+    refined_times  = refined_times[keep_indices]
+    refined_thetas = refined_thetas[keep_indices]
+    time_errs      = time_errs[keep_indices]
+    theta_errs     = theta_errs[keep_indices]
+
+    # plt.figure()
+    # plt.plot(refined_times, refined_thetas)
+    # plt.title("TEST TEST after refining")
+    # plt.show()
+
+    return refined_times, refined_thetas, time_errs, theta_errs
+
+def run_time_amplitude_dependence(time, theta, label):
+    """Essentially Perform check-in 1 analysis on a single dataset."""
+
+    print(f"\n=== Running Check-In 1 for: {label} ===")
+
+    # --- Find peaks ---
+    refined_times, refined_thetas, time_errs, theta_errs = refine_each_peak(time, theta)
+
+    # Periods and uncertainties
+    time_periods = refined_times[1:] - refined_times[:-1]
+    time_periods_err = np.sqrt(time_errs[1:]**2 + time_errs[:-1]**2)
+
+    # Omit last angle (no next peak)
+    x_values = refined_thetas[:-1]
+    y_values = time_periods
+    y_unc = time_periods_err
+
+    # ---- FILTER: discard useless and bad data.
+    mask = y_values < 1.5
+    x_values = x_values[mask]
+    y_values = y_values[mask]
+    y_unc    = y_unc[mask]
+
+    mask = y_values > 1.2
+    x_values = x_values[mask]
+    y_values = y_values[mask]
+    y_unc    = y_unc[mask]
+
+    mask = y_unc < 0.1
+    x_values = x_values[mask]
+    y_values = y_values[mask]
+    y_unc    = y_unc[mask]
+
+    # Fit line
+    p_opt, p_cov = curve_fit(linear, x_values, y_values,
+                             sigma=y_unc, absolute_sigma=True)
+    sd = np.sqrt(np.diag(p_cov))
+
+    print("FITTED PARAMETERS:")
+    print("m =", p_opt[0], sd[0])
+    print("c =", p_opt[1], sd[1])
+
+    residuals = y_values - linear(x_values, *p_opt)
+    chi2 = np.sum((residuals / y_unc)**2)
+    ndof = len(y_values) - len(p_opt)
+    chi2_red = chi2 / ndof
+    print(f"Reduced Chi^2 = {chi2_red:.2f}")
+
+    # --- Plot Period vs Angle ---
+    if PlOT_T_VS_AMPLITUDE:
+        x_lin = np.linspace(min(x_values), max(x_values), 1000)
+        plt.figure()
+        plt.errorbar(x_values, y_values, yerr=y_unc,
+                    ls='', marker='o', capsize=2, zorder=1)
+        plt.plot(x_lin, linear(x_lin, *p_opt),
+                label="Fit", zorder=2)
+        plt.xlabel("Max Angle (Degrees)")
+        plt.ylabel("Time Period (s)")
+        plt.title(f"Period vs Angle ({label})")
+        plt.legend()
+
+        # --- Residual Plot ---
+        plt.figure()
+        plt.errorbar(x_values, residuals, yerr=y_unc,
+                    ls='', marker='o', capsize=2)
+        plt.axhline(0, color="gray", linestyle="--")
+        plt.xlabel("Max Angle (Degrees)")
+        plt.ylabel("Residuals (s)")
+        plt.title(f"Residuals ({label})")
+
+        plt.show()
+
 
 def main():
     print("Hello welcome to Pendulum project")
@@ -69,6 +250,15 @@ def main():
     times = [Langle_Mlen_time, Mangle_Mlen_time, Mangle_Llen_time, Mangle_Slen_time, Sangle_Mlen_time]
     thetas = [Langle_Mlen_theta, Mangle_Mlen_theta, Mangle_Llen_theta, Mangle_Slen_theta, Sangle_Mlen_theta]
 
+    Mlen_thetas = [Langle_Mlen_theta, Mangle_Mlen_theta, Sangle_Mlen_theta]
+    Mlen_times = [Langle_Mlen_time, Mangle_Mlen_time, Sangle_Mlen_time]
+    Mlen_tiles = ["Large angle Medium Length", "Medium angle Medium length", "Small angle Medium length"]
+
+    Mangle_times = [Mangle_Llen_time, Mangle_Mlen_time, Mangle_Slen_time]
+    Mangle_thetas = [Mangle_Llen_theta, Mangle_Mlen_theta, Mangle_Slen_theta]
+    Mangle_titles = ["Medium angle Long length", "Medium angle Medium length",  "Medium angle Short length"]
+
+    # Question 0: Plot the raw data for myself.
     if PLOT_RAW_DATA:
         for t, th, title in zip(times, thetas, titles):
             plt.figure()
@@ -95,17 +285,100 @@ def main():
     3) Use check in 1 logic to check if T independent of amplitude? (I think no)
 
     '''
+    for t, th, title in zip(Mlen_times, Mlen_thetas, Mlen_tiles):
+        print(f"==========================={title}===============================")
+
+        run_time_amplitude_dependence(t, th, title)
+        refined_times, refined_thetas, _, _ = refine_each_peak(t, th)
+        run_time_amplitude_dependence(t, -th, title+" (Negative)")
+        refined_times_neg, refined_thetas_neg, _, _ = refine_each_peak(t, -th)
+
+        if PLOT_SYMMETRY:
+            # Find the symmetry
+            plt.figure()
+            plt.plot(refined_times, refined_thetas, label='positive')
+            plt.plot(refined_times_neg, refined_thetas_neg, label='negative')
+            plt.legend()
+            plt.show()
+
+            # ----- Build common time grid over the overlapping domain -----
+            t_min = max(refined_times.min(), refined_times_neg.min())
+            t_max = min(refined_times.max(), refined_times_neg.max())
+
+            t_common = np.linspace(t_min, t_max, 2000)
+
+            # ----- Interpolate both curves onto this common grid -----
+            f_pos = interp1d(refined_times, refined_thetas, kind='linear',
+                            bounds_error=False, fill_value="extrapolate")
+            f_neg = interp1d(refined_times_neg, refined_thetas_neg, kind='linear',
+                            bounds_error=False, fill_value="extrapolate")
+
+            theta_pos_interp = f_pos(t_common)
+            theta_neg_interp = f_neg(t_common)
+
+            # ----- Compute asymmetry curve -----
+            asymmetry_curve = theta_pos_interp - theta_neg_interp
+
+            # ----- Quantify asymmetrry -----
+            unsymmetry_metric = np.mean(asymmetry_curve)
+            print("Unsymmetry metric:", unsymmetry_metric)
+
+            # ----- Plot -----
+            plt.figure()
+            plt.axhline(0, color='black', linewidth=0.8)
+            plt.plot(t_common, asymmetry_curve)
+            plt.xlabel("Time")
+            plt.ylabel("Theta_pos - Theta_neg")
+            plt.title("System Asymmetry")
+            plt.show()
+
+        # Q2: Verify or refute the claim that the decay is exponential, and determine the time constant τ . You can do this for a single length.
+        '''
+        Plan.
+        Only for a single length, so just use the 3 M_len files.
+
+        1) find peaks.
+        2) fit the peaks to an exponential curve
+        3) comment on the goodness of fit, to determine if this decay is well described by an exponential.
+        '''
+        x_values = refined_times
+        y_values = refined_thetas
+        y_unc = ...
+
+        # Fit line
+        # p_opt, p_cov = curve_fit(exponential, x_values, y_values, sigma=y_unc, absolute_sigma=True)
+        p_opt, p_cov = curve_fit(exponential, x_values, y_values, p0=(y_values[0], 10))   # if i have no uncertainty yet
+        sd = np.sqrt(np.diag(p_cov))
+
+        print("== Exponential Fit ==")
+        print("FITTED PARAMETERS:")
+        print("theta0 =", p_opt[0], sd[0])
+        print("tau =", p_opt[1], sd[1])
+
+        # residuals = y_values - linear(x_values, *p_opt)
+        # chi2 = np.sum((residuals / y_unc)**2)
+        # ndof = len(y_values) - len(p_opt)
+        # chi2_red = chi2 / ndof
+        # print(f"Reduced Chi^2 = {chi2_red:.2f}")
+
+        if PLOT_EXPONENTIAL:
+            x_lin = np.linspace(min(x_values), max(x_values), 1000)
+            plt.figure()
+            # plt.errorbar(x_values, y_values, yerr=y_unc,
+            #             ls='', marker='o', capsize=2, zorder=1)
+            plt.plot(x_values, y_values, ls='', marker='o')
+            plt.plot(x_lin, exponential(x_lin, *p_opt),
+                    label="Fit", zorder=2)
+            plt.xlabel("Max Angle (Degrees)")
+            plt.ylabel("Time Period (s)")
+            plt.title(f"Exponential? ({title})")
+            plt.legend()
+
+            plt.show()
+
+        
 
 
-    # Q2: Verify or refute the claim that the decay is exponential, and determine the time constant τ . You can do this for a single length.
-    '''
-    Plan.
-    Only for a single length, so just use the 3 M_len files.
-
-    1) find peaks.
-    2) fit the peaks to an exponential curve
-    3) comment on the goodness of fit, to determine if this decay is well described by an exponential.
-    '''
 
     # Q3: Verify or refute the claim that the period depends on L as stated: T = 2(L + D)1/2 (provided that D2 ≪ L2).
     '''
@@ -116,6 +389,41 @@ def main():
     3) Comment on fit.
     
     '''
+    T_list = []
+    L_list = [0.594, 0.450, 0.357]
+    D = 0.05 
+    for t, th, title in zip(Mangle_times, Mangle_thetas, Mangle_titles):
+        refined_times, refined_thetas, time_errs, theta_errs = refine_each_peak(t, th)
+
+        # Compute individual periods
+        periods = np.diff(refined_times)
+
+        # Average T for this dataset
+        T_avg = np.mean(periods)
+
+        T_list.append(T_avg)
+
+    # Convert to arrays
+    T_list = np.array(T_list)
+    L_eff = np.array(L_list) + D
+
+    # ---- Plot measured average periods ----
+    plt.figure()
+    plt.scatter(L_eff, T_list, label="Measured T", color='k')
+
+    # ---- Plot theoretical line T = 2 sqrt(L + D) ----
+    L_smooth = np.linspace(min(L_eff), max(L_eff), 200)
+    T_theoretical = 2 * np.sqrt(L_smooth)
+
+    plt.plot(L_smooth, T_theoretical, label=r"$T = 2\sqrt{L + D}$")
+
+    plt.xlabel("L + D (m)")
+    plt.ylabel("Average Period T (s)")
+    plt.title("Period vs Effective Length")
+    plt.legend()
+    plt.grid(True)
+    plt.show()
+
 
     # Q4: investigate the effect of L + D and θ0 on τ . 
     # If you find a trend, attempt to find a function which fits your data. 
