@@ -6,7 +6,7 @@ import numpy as np
 from scipy.optimize import curve_fit
 from scipy.signal import find_peaks
 
-PRINT_DATA_THETA_V_TIME = False
+PRINT_DATA_THETA_V_TIME = True
 
 def linear(x, m, c):
     """
