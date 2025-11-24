@@ -15,7 +15,10 @@ PLOT_SYMMETRY = True
 PLOT_EXPONENTIAL = True
 
 LONG, MEDIUM, SHORT = 0.594, 0.450, 0.357
-DISTANCE_TO_CM = 0.005
+DISTANCE_TO_CM = 0.01
+
+def constant(x, c0):
+    return c0 * np.ones_like(x)
 
 def linear(x, m, c):
     """
@@ -78,6 +81,10 @@ def refine_peak(i, time, theta, window, sigma_theta=None):
 
     return t_max, theta_max, np.sqrt(var_t), np.sqrt(var_th)
 
+def chi2_red(model, x, y, yerr, params):
+    res = y - model(x, *params)
+    return np.sum((res / yerr)**2) / (len(y) - len(params))
+
 def format_uncertainty(value, uncertainty):
     """
     Format value ± uncertainty so that:
@@ -117,7 +124,7 @@ def refine_each_peak(time, theta):
             refined_times.append(t_max)
             refined_thetas.append(th_max)
             time_errs.append(dt)
-            theta_errs.append(dth)
+            theta_errs.append(max(dth,0.25))
 
     refined_times = np.array(refined_times)
     refined_thetas = np.array(refined_thetas)
@@ -213,45 +220,141 @@ def run_time_amplitude_dependence(time, theta, label):
     y_values = y_values[mask]
     y_unc    = y_unc[mask]
 
-    # Fit line
-    p_opt, p_cov = curve_fit(linear, x_values, y_values,
-                             sigma=y_unc, absolute_sigma=True)
-    sd = np.sqrt(np.diag(p_cov))
+    models = {
+        "Constant":  (constant, 1),
+        "Linear":    (linear,   2),
+        "Quadratic": (quadratic, 3)
+    }
+    
+    colors = {
+        "Constant" : "red",
+        "Linear" : "orange",
+        "Quadratic" : "green"
+    }
 
-    print("FITTED PARAMETERS:")
-    print("m =", p_opt[0], sd[0])
-    print("c =", p_opt[1], sd[1])
+    fit_params   = {}
+    fit_errors   = {}
+    chi2_dict    = {}
+    chi2_red_dict = {}
+    residuals_dict = {}
 
-    residuals = y_values - linear(x_values, *p_opt)
-    chi2 = np.sum((residuals / y_unc)**2)
-    ndof = len(y_values) - len(p_opt)
-    chi2_red = chi2 / ndof
-    print(f"Reduced Chi^2 = {chi2_red:.2f}")
+    # ---------- PERFORM ALL FITS ----------
+    for name, (func, npars) in models.items():
+        p_opt, p_cov = curve_fit(func, x_values, y_values,
+                                 sigma=y_unc, absolute_sigma=True,
+                                 maxfev=10000)
+        sd = np.sqrt(np.diag(p_cov))
 
-    # --- Plot Period vs Angle ---
+        # store results
+        fit_params[name] = p_opt
+        fit_errors[name] = sd
+
+        # chi-square
+        residuals = y_values - func(x_values, *p_opt)
+        chi2 = np.sum((residuals / y_unc)**2)
+        ndof = len(y_values) - npars
+        chi2_red = chi2 / ndof
+
+        chi2_dict[name] = chi2
+        chi2_red_dict[name] = chi2_red
+        residuals_dict[name] = residuals
+
+        # print summary
+        print(f"\n=== {name} Fit ===")
+        for i, (par, err) in enumerate(zip(p_opt, sd)):
+            print(f"p{i} = {par:.6f} ± {err:.6f}")
+        print(f"Chi^2       = {chi2:.3f}")
+        print(f"Chi^2_red   = {chi2_red:.3f}")
+
+    # ---------- PLOTTING ----------
     if PlOT_T_VS_AMPLITUDE:
         x_lin = np.linspace(min(x_values), max(x_values), 1000)
+
+        # --- Main fit plot ---
         plt.figure()
         plt.errorbar(x_values, y_values, yerr=y_unc,
-                    ls='', marker='o', capsize=2, zorder=1)
-        plt.plot(x_lin, linear(x_lin, *p_opt),
-                label="Fit", zorder=2)
+                     ls='', marker='o', capsize=2,
+                     label="Data", zorder=1)
+
+        # plot all fits
+        plt.plot(x_lin, constant(x_lin, *fit_params["Constant"]),
+                 label="Constant Fit", zorder=2, color = colors["Constant"])
+        plt.plot(x_lin, linear(x_lin, *fit_params["Linear"]),
+                 label="Linear Fit", zorder=3, color = colors["Linear"])
+        plt.plot(x_lin, quadratic(x_lin, *fit_params["Quadratic"]),
+                 label="Quadratic Fit", zorder=4, color=colors["Quadratic"])
+
         plt.xlabel("Max Angle (Degrees)")
         plt.ylabel("Time Period (s)")
         plt.title(f"Period vs Angle ({label})")
         plt.legend()
 
-        # --- Residual Plot ---
+        # --- Residuals plot ---
         plt.figure()
-        plt.errorbar(x_values, residuals, yerr=y_unc,
-                    ls='', marker='o', capsize=2)
+        for name in models.keys():
+            plt.errorbar(x_values, residuals_dict[name], yerr=y_unc,
+                         ls='', marker='o', capsize=2,
+                         label=f"{name} Residuals", color=colors[name])
+
         plt.axhline(0, color="gray", linestyle="--")
         plt.xlabel("Max Angle (Degrees)")
         plt.ylabel("Residuals (s)")
         plt.title(f"Residuals ({label})")
+        plt.legend()
 
         plt.show()
 
+def fit_exponential_decay(refined_times, refined_thetas, refined_theta_errs, title):
+    """returns tau, tau_err"""
+    x_values = refined_times
+    y_values = refined_thetas
+    y_unc = refined_theta_errs
+
+    # Fit line
+    p_opt, p_cov = curve_fit(exponential, x_values, y_values, sigma=y_unc, absolute_sigma=True, p0=(y_values[0], 10))
+    # p_opt, p_cov = curve_fit(exponential, x_values, y_values, p0=(y_values[0], 10))   # if i have no uncertainty yet
+    sd = np.sqrt(np.diag(p_cov))
+
+    print("== Exponential Fit ==")
+    print("FITTED PARAMETERS:")
+    print("theta0 =", p_opt[0], sd[0])
+    print("tau =", p_opt[1], sd[1])
+
+    residuals = y_values - exponential(x_values, *p_opt)
+    chi2 = np.sum((residuals / y_unc)**2)
+    ndof = len(y_values) - len(p_opt)
+    chi2_red = chi2 / ndof
+    print(f"Reduced Exponential: Chi^2 = {chi2_red:.2f}")
+
+    if PLOT_EXPONENTIAL:
+        x_lin = np.linspace(min(x_values), max(x_values), 1000)
+        plt.figure()
+        plt.errorbar(x_values, y_values, yerr=y_unc, ls='', marker='o', capsize=2, zorder=1)
+        # plt.plot(x_values, y_values, ls='', marker='o')
+        plt.plot(x_lin, exponential(x_lin, *p_opt),
+                label="Fit", zorder=2)
+        plt.xlabel("Time (s)")
+        plt.ylabel("Amplitude (degrees)")
+        plt.title(f"Exponential Fit ({title})")
+        plt.legend()
+
+        # and the residuals plot for the exponential
+        plt.figure()
+        plt.errorbar(
+            x_values,
+            residuals,
+            yerr=y_unc,
+            ls='', marker='o', capsize=3
+        )
+        plt.axhline(0, color='gray', linestyle='--')
+        plt.xlabel("Time (s)")
+        plt.ylabel("Residual (degrees)")
+        plt.title(f"Residuals of Exponential Fit ({title})")
+        plt.grid(True)
+
+        plt.show()
+
+    return p_opt[1], sd[1]
 
 def main():
     print("Hello welcome to Pendulum project")
@@ -348,9 +451,11 @@ def main():
             plt.figure()
             plt.axhline(0, color='black', linewidth=0.8)
             plt.plot(t_common, asymmetry_curve)
+            plt.axhline(unsymmetry_metric, color='red', linestyle='--', label=f"Mean = {unsymmetry_metric:.5f}")
             plt.xlabel("Time")
             plt.ylabel("Theta_pos - Theta_neg")
-            plt.title("System Asymmetry")
+            plt.title(f"System Asymmetry ({title})")
+            plt.legend()
             plt.show()
 
         # Q2: Verify or refute the claim that the decay is exponential, and determine the time constant τ . You can do this for a single length.
@@ -362,57 +467,8 @@ def main():
         2) fit the peaks to an exponential curve
         3) comment on the goodness of fit, to determine if this decay is well described by an exponential.
         '''
-        x_values = refined_times
-        y_values = refined_thetas
-        y_unc = refined_theta_errs
 
-        # Fit line
-        p_opt, p_cov = curve_fit(exponential, x_values, y_values, sigma=y_unc, absolute_sigma=True, p0=(y_values[0], 10))
-        # p_opt, p_cov = curve_fit(exponential, x_values, y_values, p0=(y_values[0], 10))   # if i have no uncertainty yet
-        sd = np.sqrt(np.diag(p_cov))
-
-        print("== Exponential Fit ==")
-        print("FITTED PARAMETERS:")
-        print("theta0 =", p_opt[0], sd[0])
-        print("tau =", p_opt[1], sd[1])
-
-        residuals = y_values - exponential(x_values, *p_opt)
-        chi2 = np.sum((residuals / y_unc)**2)
-        ndof = len(y_values) - len(p_opt)
-        chi2_red = chi2 / ndof
-        print(f"Reduced Exponential: Chi^2 = {chi2_red:.2f}")
-
-        if PLOT_EXPONENTIAL:
-            x_lin = np.linspace(min(x_values), max(x_values), 1000)
-            plt.figure()
-            plt.errorbar(x_values, y_values, yerr=y_unc, ls='', marker='o', capsize=2, zorder=1)
-            # plt.plot(x_values, y_values, ls='', marker='o')
-            plt.plot(x_lin, exponential(x_lin, *p_opt),
-                    label="Fit", zorder=2)
-            plt.xlabel("Time (s)")
-            plt.ylabel("Amplitude (degrees)")
-            plt.title(f"Exponential? ({title})")
-            plt.legend()
-
-            # and the residuals plot for the exponential
-            plt.figure()
-            plt.errorbar(
-                x_values,
-                residuals,
-                yerr=y_unc,
-                ls='', marker='o', capsize=3
-            )
-            plt.axhline(0, color='gray', linestyle='--')
-            plt.xlabel("Time (s)")
-            plt.ylabel("Residual (degrees)")
-            plt.title(f"Residuals of Exponential Fit ({title})")
-            plt.grid(True)
-
-            plt.show()
-
-        
-
-
+        tau, tau_err = fit_exponential_decay(refined_times, refined_thetas, refined_theta_errs, title)
 
     # Q3: Verify or refute the claim that the period depends on L as stated: T = 2(L + D)1/2 (provided that D2 ≪ L2).
     '''
@@ -472,121 +528,147 @@ def main():
     '''
     Help!
     '''
+    tau_list = []
+    tau_err_list = []
+    theta0_list = []
 
-#     tau_list = []
-#     tau_err_list = []
-#     theta0_list = []
-#     for t, th, title in zip(times, thetas, titles):
-#         # append a tau to tau list
-#         # append a tau_err to list
-#         refined_times, refined_thetas, time_errs, theta_errs = refine_each_peak(t, th)
-        
+    titles = [i+"WOW" for i in titles]
 
+    for t, th, title in zip(times, thetas, titles):
 
-#         # --- append results ---
-#         tau_list.append(tau)
-#         tau_err_list.append(tau_err)
-#         theta0_list.append(theta0)
+        # --- take first 100 points ---
+        t = t[:1000]
+        th = th[:1000]
 
-# # Convert to arrays
-# tau_list = np.array(tau_list)
-# tau_err_list = np.array(tau_err_list)
-# theta0_list = np.array(theta0_list)
-#         ...
+        # --- refine peaks ---
+        refined_times, refined_thetas, time_errs, theta_errs = refine_each_peak(t, th)
 
-#     Leff_list = np.array([MEDIUM, MEDIUM, LONG, SHORT, MEDIUM]) + D
+        # --- compute tau and tau uncertainty ---
+        tau, tau_err = fit_exponential_decay(refined_times, refined_thetas, theta_errs, title)
+
+        # --- estimate initial amplitude theta0 ---
+        theta0 = np.max(np.abs(refined_thetas))
+
+        # --- append results ---
+        tau_list.append(tau)
+        tau_err_list.append(tau_err)
+        theta0_list.append(theta0)
+
+    # Convert to arrays
+    tau_list = np.array(tau_list)
+    tau_err_list = np.array(tau_err_list)
+    theta0_list = np.array(theta0_list)
+
+    # Effective lengths L + D (matching 5 datasets)
+    Leff_list = np.array([MEDIUM, MEDIUM, LONG, SHORT, MEDIUM]) + D
     
-#     # titles = ["Large angle Medium Length", "Medium angle Medium length", "Medium angle Long length", "Medium angle Short length", "Small angle Medium length"]
+    print("\n=== τ vs Effective Length L_eff ===")
+    # Perform fits
+    p_lin_L, c_lin_L = curve_fit(linear,     Leff_list, tau_list, sigma=tau_err_list, absolute_sigma=True)
+    p_pow_L, c_pow_L = curve_fit(power_law,  Leff_list, tau_list, sigma=tau_err_list, absolute_sigma=True)
+    p_sqt_L, c_sqt_L = curve_fit(sqrt_model, Leff_list, tau_list, sigma=tau_err_list, absolute_sigma=True)
+
+    # Compute reduced chi²
+    chi_lin_L = chi2_red(linear,     Leff_list, tau_list, tau_err_list, p_lin_L)
+    chi_pow_L = chi2_red(power_law,  Leff_list, tau_list, tau_err_list, p_pow_L)
+    chi_sqt_L = chi2_red(sqrt_model, Leff_list, tau_list, tau_err_list, p_sqt_L)
+
+    print(f"Linear χ² = {chi_lin_L:.3f}")
+    print(f"Power-law χ² = {chi_pow_L:.3f}")
+    print(f"Sqrt χ² = {chi_sqt_L:.3f}")
+
+    # Pick best model
+    chi_vals_L = np.array([chi_lin_L, chi_pow_L, chi_sqt_L])
+    models_L = [linear, power_law, sqrt_model]
+    params_L = [p_lin_L, p_pow_L, p_sqt_L]
+    best_idx_L = np.argmin(chi_vals_L)
+
+    best_model_L = models_L[best_idx_L]
+    best_params_L = params_L[best_idx_L]
+
+    print("\nBest model for τ(L_eff):", best_model_L.__name__)
+    print("Best-fit parameters:", best_params_L)
 
 
-#     print("\n=== τ vs Effective Length L_eff ===")
+    # Plot τ vs L_eff
+    L_plot = np.linspace(min(Leff_list), max(Leff_list), 400)
 
-#     # Perform fits
-#     p_lin_L, c_lin_L = curve_fit(linear,     Leff_list, tau_list, sigma=tau_err_list, absolute_sigma=True)
-#     p_pow_L, c_pow_L = curve_fit(power_law,  Leff_list, tau_list, sigma=tau_err_list, absolute_sigma=True)
-#     p_sqt_L, c_sqt_L = curve_fit(sqrt_model, Leff_list, tau_list, sigma=tau_err_list, absolute_sigma=True)
-
-#     # Compute reduced chi²
-#     chi_lin_L = chi2_red(linear,     Leff_list, tau_list, tau_err_list, p_lin_L)
-#     chi_pow_L = chi2_red(power_law,  Leff_list, tau_list, tau_err_list, p_pow_L)
-#     chi_sqt_L = chi2_red(sqrt_model, Leff_list, tau_list, tau_err_list, p_sqt_L)
-
-#     print(f"Linear χ² = {chi_lin_L:.3f}")
-#     print(f"Power-law χ² = {chi_pow_L:.3f}")
-#     print(f"Sqrt χ² = {chi_sqt_L:.3f}")
-
-#     # Pick best model
-#     chi_vals_L = np.array([chi_lin_L, chi_pow_L, chi_sqt_L])
-#     models_L = [linear, power_law, sqrt_model]
-#     params_L = [p_lin_L, p_pow_L, p_sqt_L]
-#     best_idx_L = np.argmin(chi_vals_L)
-
-#     best_model_L = models_L[best_idx_L]
-#     best_params_L = params_L[best_idx_L]
-
-#     print("\nBest model for τ(L_eff):", best_model_L.__name__)
-#     print("Best-fit parameters:", best_params_L)
-
-
-#     # Plot τ vs L_eff
-#     L_plot = np.linspace(min(Leff_list), max(Leff_list), 400)
-
-#     plt.figure()
-#     plt.errorbar(Leff_list, tau_list, yerr=tau_err_list, fmt='o', label="Data")
-#     plt.plot(L_plot, best_model_L(L_plot, *best_params_L), label=f"Best fit: {best_model_L.__name__}")
-#     plt.xlabel("Effective Length $L + D$ (m)")
-#     plt.ylabel("Damping Time Constant $\\tau$ (s)")
-#     plt.title("Dependence of Damping Constant on Effective Length")
-#     plt.legend()
-#     plt.grid(alpha=0.3)
-#     plt.show()
+    plt.figure()
+    plt.errorbar(Leff_list, tau_list, yerr=tau_err_list, fmt='o', label="Data")
+    plt.plot(L_plot, best_model_L(L_plot, *best_params_L), label=f"Best fit: {best_model_L.__name__}")
+    plt.xlabel("Effective Length $L + D$ (m)")
+    plt.ylabel("Damping Time Constant $\\tau$ (s)")
+    plt.title("Dependence of Damping Constant on Effective Length")
+    plt.legend()
+    plt.grid(alpha=0.3)
+    plt.show()
 
 
 
-#     # ----------------------------
-#     # Fit τ vs Initial Amplitude θ0
-#     # ----------------------------
-#     print("\n=== τ vs Initial Amplitude θ0 ===")
+    # ----------------------------
+    # Fit τ vs Initial Amplitude θ0
+    # ----------------------------
+    print("\n=== τ vs Initial Amplitude θ0 ===")
 
-#     # Perform fits
-#     p_lin_t, c_lin_t = curve_fit(linear,     theta0_list, tau_list, sigma=tau_err_list, absolute_sigma=True)
-#     p_pow_t, c_pow_t = curve_fit(power_law,  theta0_list, tau_list, sigma=tau_err_list, absolute_sigma=True)
-#     p_sqt_t, c_sqt_t = curve_fit(sqrt_model, theta0_list, tau_list, sigma=tau_err_list, absolute_sigma=True)
+    # Perform fits
+    p_lin_t, c_lin_t = curve_fit(linear,     theta0_list, tau_list, sigma=tau_err_list, absolute_sigma=True)
+    p_pow_t, c_pow_t = curve_fit(power_law,  theta0_list, tau_list, sigma=tau_err_list, absolute_sigma=True)
+    p_sqt_t, c_sqt_t = curve_fit(sqrt_model, theta0_list, tau_list, sigma=tau_err_list, absolute_sigma=True)
 
-#     # Compute reduced chi²
-#     chi_lin_t = chi2_red(linear,     theta0_list, tau_list, tau_err_list, p_lin_t)
-#     chi_pow_t = chi2_red(power_law,  theta0_list, tau_list, tau_err_list, p_pow_t)
-#     chi_sqt_t = chi2_red(sqrt_model, theta0_list, tau_list, tau_err_list, p_sqt_t)
+    sd_lin  = np.sqrt(np.diag(c_lin_t))
+    sd_pow  = np.sqrt(np.diag(c_pow_t))
+    sd_sqt  = np.sqrt(np.diag(c_sqt_t))
 
-#     print(f"Linear χ² = {chi_lin_t:.3f}")
-#     print(f"Power-law χ² = {chi_pow_t:.3f}")
-#     print(f"Sqrt χ² = {chi_sqt_t:.3f}")
+    # Compute reduced chi²
+    chi_lin_t = chi2_red(linear,     theta0_list, tau_list, tau_err_list, p_lin_t)
+    chi_pow_t = chi2_red(power_law,  theta0_list, tau_list, tau_err_list, p_pow_t)
+    chi_sqt_t = chi2_red(sqrt_model, theta0_list, tau_list, tau_err_list, p_sqt_t)
 
-#     # Pick best model
-#     chi_vals_t = np.array([chi_lin_t, chi_pow_t, chi_sqt_t])
-#     models_t = [linear, power_law, sqrt_model]
-#     params_t = [p_lin_t, p_pow_t, p_sqt_t]
-#     best_idx_t = np.argmin(chi_vals_t)
+    print(f"Linear χ² = {chi_lin_t:.3f}")
+    print(f"Power-law χ² = {chi_pow_t:.3f}")
+    print(f"Sqrt χ² = {chi_sqt_t:.3f}")
 
-#     best_model_t = models_t[best_idx_t]
-#     best_params_t = params_t[best_idx_t]
+    # Pick best model
+    chi_vals_t = np.array([chi_lin_t, chi_pow_t, chi_sqt_t])
+    models_t = [linear, power_law, sqrt_model]
+    params_t = [p_lin_t, p_pow_t, p_sqt_t]
+    param_unc = [sd_lin, sd_pow, sd_sqt]
 
-#     print("\nBest model for τ(θ0):", best_model_t.__name__)
-#     print("Best-fit parameters:", best_params_t)
+    best_idx_t = np.argmin(chi_vals_t)
+    best_model_t = models_t[best_idx_t]
+    best_params_t = params_t[best_idx_t]
+    best_unc_t    = param_unc[best_idx_t]
+
+    print("\nBest model for τ(θ0):", best_model_t.__name__)
+    print("Best-fit parameters + uncertainties:")
+    for i, p in enumerate(best_params_t):
+        print(f"  p[{i}] = {p:.6g} ± {best_unc_t[i]:.2g}")
 
 
-#     # Plot τ vs θ0
-#     th_plot = np.linspace(min(theta0_list), max(theta0_list), 400)
+    # Plot τ vs θ0
+    th_plot = np.linspace(min(theta0_list), max(theta0_list), 400)
 
-#     plt.figure()
-#     plt.errorbar(theta0_list, tau_list, yerr=tau_err_list, fmt='o', label="Data")
-#     plt.plot(th_plot, best_model_t(th_plot, *best_params_t), label=f"Best fit: {best_model_t.__name__}")
-#     plt.xlabel("Initial Amplitude $\\theta_0$ (rad)")
-#     plt.ylabel("Damping Time Constant $\\tau$ (s)")
-#     plt.title("Dependence of Damping Constant on Initial Amplitude")
-#     plt.legend()
-#     plt.grid(alpha=0.3)
-#     plt.show()
+    plt.figure()
+    plt.errorbar(theta0_list, tau_list, yerr=tau_err_list, fmt='o', label="Data")
+    plt.plot(th_plot, best_model_t(th_plot, *best_params_t), label=f"Best fit: {best_model_t.__name__}")
+    plt.xlabel("Initial Amplitude $\\theta_0$ (degrees)")
+    plt.ylabel("Damping Time Constant $\\tau$ (s)")
+    plt.title("Dependence of Damping Constant on Initial Amplitude")
+    plt.legend()
+    plt.grid(alpha=0.3)
+    
+    resid = tau_list - best_model_t(theta0_list, *best_params_t)
+    plt.figure()
+    plt.errorbar(theta0_list, resid, yerr=tau_err_list,
+                fmt='o', capsize=3)
+    plt.axhline(0, color='gray', linestyle='--')
+    plt.xlabel("Initial Amplitude $\\theta_0$ (degrees)")
+    plt.ylabel("Residuals (s)")
+    plt.title(f"Residuals for Best Fit ({best_model_t.__name__})")
+    plt.grid(alpha=0.3)
+
+
+    plt.show()
 
 
     print("=== Program end ===")
